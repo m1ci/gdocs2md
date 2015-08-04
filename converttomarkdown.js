@@ -18,7 +18,7 @@ Put all documents you wish to convert into category folders within a folder in y
 1. Tools > Script Manager
 2. Select "convertDefaultFolder()" function.
 3. Click Run button.
-4. All documents in the folder will be converted to markdown, and resulting files put in a new subfolder called "ExportedMarkdown-TIMESTAMP" where TIMESTAMP is the current ISO GMT timestamp.
+4. All documents in the folder will be converted to markdown, and resulting files put in a new subfolder called "ExportedMarkdown-TIMESTAMP" where TIMESTAMP is the current ISO GMT timestamp. Note that during conversion, the export folder will be named "ExportedMarkdown-IN-PROGRESS" - see notes below in Miscellaneous section on resuming.
 
 ### Settings
 There are several optional features, convertDefaultFolder() runs with most features enabled, however most other functions take a settings object. The following fields should be set to true to enable the corresponding features:
@@ -34,7 +34,8 @@ There are several optional features, convertDefaultFolder() runs with most featu
 You can call convertFolderByName(folderName, settings) with a different folder name as required
 
 ### Miscellaneous
-There are also functions for emailing documents, see source for details.
+  * There are also functions for emailing documents, see source for details.
+  * You may find that for large sets of documents, the script will time out. In this case, please restart the script and it will attempt to resume the conversion from where it reached. Repeatedly running the script should allow it to complete. Files named "EXPORT-COMPLETE.txt" are used to track progress to allow resuming - these can safely be deleted or ignored after export is complete.
 
 ## Interpreted formats
   * Text:
@@ -103,35 +104,58 @@ function convertDownOneLevelByName(folderName, settings) {
   if (folderIt.hasNext()) {
     var folder = folderIt.next();
     convertDownOneLevel(folder, settings);
+  } else {
+    Logger.log("Requested folder '" + folderName + "' not found.")
+  }
+}
+
+function ensureFolder(parentFolder, name) {
+  var folderIt = parentFolder.getFoldersByName(name);
+  if (folderIt.hasNext()) {
+    Logger.log("Requested folder '" + name + "' in '" + parentFolder + "', it already exists so using directly.");
+    return folderIt.next();
+  } else {
+    Logger.log("Requested folder '" + name + "' in '" + parentFolder + "', creating it.");
+    return parentFolder.createFolder(name);
   }
 }
 
 function convertDownOneLevel(rootFolder, settings) {
 
-  var mainExportFolder = rootFolder.createFolder(exportFolderName())
+  //If in-progress export folder already exists, use it, otherwise create
+  var mainExportFolder = ensureFolder(rootFolder, exportFolderNameInProgress());
+
   var folders = rootFolder.getFolders();
   //Convert all folders that don't start with our export prefix
   while (folders.hasNext()) {
     var folder = folders.next();
     if (folder.getName().substring(0, exportFolderPrefix.length) != exportFolderPrefix) {
-      var exportFolder = mainExportFolder.createFolder(folder.getName())
+      var exportFolder = ensureFolder(mainExportFolder, folder.getName())
       convertFolder(folder, exportFolder, settings);
     }
   }
-  //Convert contents of the folder as well, mainly to catch any meta data
+  //Convert contents of the root folder as well, mainly to catch any meta data
   convertFolder(rootFolder, mainExportFolder, settings);
+
+  //Now export is complete, rename it so it is no longer in progress
+  mainExportFolder.setName(exportFolderName());
 }
 
 function convertFolderByName(folderName, settings) {
   var folderIt = DriveApp.getFoldersByName(folderName);
   if (folderIt.hasNext()) {
     var folder = folderIt.next();
-    var exportFolder = folder.createFolder(exportFolderName())
+    var exportFolder = ensureFolder(folder, exportFolderNameInProgress());
     convertFolder(folder, exportFolder, settings);
+    //Now export is complete, rename it so it is no longer in progress
+    exportFolder.setName(exportFolderName());
   }
 }
 
 function convertFolder(folder, exportFolder, settings) {
+
+  var exportCompleteName = "EXPORT-COMPLETE.txt";
+
   var files = folder.getFilesByType(MimeType.GOOGLE_DOCS);
 
   var convertedDocNames = "";
@@ -139,24 +163,38 @@ function convertFolder(folder, exportFolder, settings) {
   while (files.hasNext()) {
     var file = files.next();
     var doc = DocumentApp.openById(file.getId());
-    var converted = convertToMarkdownAttachments(doc, settings);
-    var docFolder = exportFolder.createFolder(doc.getName());
-    convertedDocNames += doc.getName() + "\n";
+    var docFolder = ensureFolder(exportFolder, doc.getName());
 
-    // Write all files to target folder
-    for(var file in converted.files) {
-      file = converted.files[file];
-      var blob = file.blob.copyBlob();
-      var name = file.name;
-      blob.setName(name);
-      docFolder.createFile(blob);
-    }
+    //If we already have an EXPORT-COMPLETE.txt then a previous
+    //run of the script has already converted the file, so skip
+    if (docFolder.getFilesByName(exportCompleteName).hasNext()) {
+      convertedDocNames += doc.getName() + ": already done - skipping\n";
+      Logger.log(doc.getName() + ": already done - skipping");
 
-    // Write markdown file to target folder
-    if (settings.plainTextOutput) {
-      docFolder.createFile(doc.getName() + ".txt", converted.markdown, "text/plain");
+    //Convert unconverted file
     } else {
-      docFolder.createFile(doc.getName() + ".md", converted.markdown, "text/x-markdown");
+      Logger.log(doc.getName() + ": converting...");
+      var converted = convertToMarkdownAttachments(doc, settings);
+      convertedDocNames += doc.getName() + "\n";
+
+      // Write all files to target folder
+      for(var file in converted.files) {
+        file = converted.files[file];
+        var blob = file.blob.copyBlob();
+        var name = file.name;
+        blob.setName(name);
+        docFolder.createFile(blob);
+      }
+
+      // Write markdown file to target folder
+      if (settings.plainTextOutput) {
+        docFolder.createFile(doc.getName() + ".txt", converted.markdown, "text/plain");
+      } else {
+        docFolder.createFile(doc.getName() + ".md", converted.markdown, "text/x-markdown");
+      }
+
+      //Mark this folder as converted, so we won't redo it if resuming
+      docFolder.createFile(exportCompleteName, "Export completed at " + Utilities.formatDate(new Date(), "GMT", "yyyy-MM-dd'T'HH:mm:ss'Z'"), MimeType.PLAIN_TEXT);
     }
   }
 
@@ -165,10 +203,15 @@ function convertFolder(folder, exportFolder, settings) {
 }
 
 var exportFolderPrefix = "ExportedMarkdown-";
+var exportFolderInProgressSuffix = "IN-PROGRESS";
 
 function exportFolderName() {
   var timeStamp = Utilities.formatDate(new Date(), "GMT", "yyyy-MM-dd'T'HH:mm:ss'Z'");
   return exportFolderPrefix + timeStamp;
+}
+
+function exportFolderNameInProgress() {
+  return exportFolderPrefix + exportFolderInProgressSuffix;
 }
 
 function mailActiveDocumentAsMarkdown() {
@@ -689,4 +732,41 @@ function processTextElement(inSrc, txt, settings, inCodeBlock) {
   }
 
   return pOut;
+}
+
+function endsWith(s, suffix) {
+    return s.indexOf(suffix, this.length - suffix.length) !== -1;
+};
+
+//Recursive copy GOOGLE_DOCS files in expected gdocs2md layout from one root
+//folder to another. Can be used to backup a file layout
+function copyFolders(sourceFolder, targetFolder) {
+  var folderIt = DriveApp.getFoldersByName(sourceFolder);
+  var folderDest = DriveApp.createFolder(targetFolder)
+
+  if (folderIt.hasNext()) {
+    var folder = folderIt.next();
+    Logger.log(folder);
+    var subjectFoldersIt = folder.getFolders();
+    while (subjectFoldersIt.hasNext()) {
+
+      //Source and destination folders for this subject
+      var subjectFolder = subjectFoldersIt.next();
+      var subjectFolderDest = folderDest.createFolder(subjectFolder.getName())
+
+      Logger.log("- " + subjectFolder);
+      var subjectFilesIt = subjectFolder.getFilesByType(MimeType.GOOGLE_DOCS);
+      while (subjectFilesIt.hasNext()) {
+
+        var subjectFile = subjectFilesIt.next();
+        Logger.log("  - " + subjectFile);
+        var name = subjectFile.getName();
+        var newName = name;
+        Logger.log("      '" + name + "'->'" + newName + "'");
+
+        var fileDest = subjectFile.makeCopy(newName, subjectFolderDest)
+
+      }
+    }
+  }
 }

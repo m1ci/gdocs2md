@@ -17,7 +17,7 @@ Put all documents you wish to convert into category folders within a folder in y
 1. Tools > Script Manager
 2. Select "convertDefaultFolder()" function.
 3. Click Run button.
-4. All documents in the folder will be converted to markdown, and resulting files put in a new subfolder called "ExportedMarkdown-TIMESTAMP" where TIMESTAMP is the current ISO GMT timestamp.
+4. All documents in the folder will be converted to markdown, and resulting files put in a new subfolder called "ExportedMarkdown-TIMESTAMP" where TIMESTAMP is the current ISO GMT timestamp. Note that during conversion, the export folder will be named "ExportedMarkdown-IN-PROGRESS" - see notes below in Miscellaneous section on resuming.
 
 ### Settings
 There are several optional features, convertDefaultFolder() runs with most features enabled, however most other functions take a settings object. The following fields should be set to true to enable the corresponding features:
@@ -33,7 +33,8 @@ There are several optional features, convertDefaultFolder() runs with most featu
 You can call convertFolderByName(folderName, settings) with a different folder name as required
 
 ### Miscellaneous
-There are also functions for emailing documents, see source for details.
+  * There are also functions for emailing documents, see source for details.
+  * You may find that for large sets of documents, the script will time out. In this case, please restart the script and it will attempt to resume the conversion from where it reached. Repeatedly running the script should allow it to complete. Files named "EXPORT-COMPLETE.txt" are used to track progress to allow resuming - these can safely be deleted or ignored after export is complete.
 
 ## Interpreted formats
   * Text:
